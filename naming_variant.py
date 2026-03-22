@@ -11,11 +11,117 @@ import re
 from pathlib import Path
 
 
+# 조사/서술어 결합형을 제거할 때는 긴 형태부터 본다.
+# 예: "남궁세가에서만" -> "만" 제거 -> "에서" 제거
+_KOREAN_SUFFIXES = tuple(
+    sorted(
+        {
+            "께서는",
+            "에게서는",
+            "한테서는",
+            "께서도",
+            "에게서도",
+            "한테서도",
+            "에게서는",
+            "에게서",
+            "한테서",
+            "께서",
+            "에게는",
+            "한테는",
+            "에게도",
+            "한테도",
+            "으로는",
+            "로는",
+            "으로도",
+            "로도",
+            "에서는",
+            "에서도",
+            "에선",
+            "에겐",
+            "에게",
+            "한테",
+            "에서",
+            "으로",
+            "이랑",
+            "하고",
+            "이라는",
+            "이라고",
+            "이란",
+            "이었다",
+            "였다",
+            "이다",
+            "이고",
+            "이며",
+            "이라",
+            "라는",
+            "라고",
+            "라며",
+            "라면",
+            "와는",
+            "과는",
+            "와도",
+            "과도",
+            "와",
+            "과",
+            "랑",
+            "께",
+            "의",
+            "은",
+            "는",
+            "이",
+            "가",
+            "을",
+            "를",
+            "도",
+            "만",
+            "에",
+            "로",
+            "인",
+            "일",
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+
 def _safe_read(path):
     p = Path(path)
     if p.exists():
         return p.read_text(encoding="utf-8")
     return ""
+
+
+def _expand_korean_suffix_strips(text: str, max_passes: int = 3) -> set[str]:
+    """조사/서술어 결합형을 벗긴 후보형들을 생성한다.
+
+    예:
+    - 남궁세가의 -> {남궁세가}
+    - 남궁세가에서는 -> {남궁세가에서, 남궁세가}
+
+    주의:
+    - 정규명 자체가 조사처럼 끝나는 경우가 있으므로, "최종 형태" 하나만 반환하면
+      `남궁세가` -> `남궁세`처럼 과잉 제거될 수 있다.
+    - 따라서 중간 후보들을 모두 만들어 canonical/alias와 비교한다.
+    """
+    seen = {text}
+    frontier = {text}
+
+    for _ in range(max_passes):
+        next_frontier: set[str] = set()
+        for current in frontier:
+            for suffix in _KOREAN_SUFFIXES:
+                if current.endswith(suffix) and len(current) > len(suffix) + 1:
+                    stripped = current[: -len(suffix)]
+                    if stripped not in seen:
+                        seen.add(stripped)
+                        next_frontier.add(stripped)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    seen.discard(text)
+    return seen
 
 
 def _extract_canonical_names(novel_dir: str) -> dict[str, list[str]]:
@@ -146,13 +252,6 @@ def _scan_chapters(novel_dir: str, registry: dict, episode_range: str = None) ->
             if len(prefix) < 2:
                 continue
 
-            # 한국어 조사 목록 (조사 제거 후 비교)
-            _JOSA = (
-                "이", "가", "을", "를", "은", "는", "의", "와", "과",
-                "도", "만", "께", "에서", "에게", "으로", "로", "에",
-                "이다", "이고", "이며", "이라", "인", "일",
-            )
-
             # 본문에서 prefix로 시작하는 연속 한글 찾기
             pattern = re.compile(prefix + r"[\w가-힣]*")
             for m in pattern.finditer(text):
@@ -161,12 +260,10 @@ def _scan_chapters(novel_dir: str, registry: dict, episode_range: str = None) ->
                     continue
 
                 # 조사 제거 후 재비교
-                stripped = found
-                for josa in sorted(_JOSA, key=len, reverse=True):
-                    if stripped.endswith(josa) and len(stripped) > len(josa) + 1:
-                        stripped = stripped[:-len(josa)]
-                        break
-                if stripped == canonical or stripped in aliases:
+                stripped_forms = _expand_korean_suffix_strips(found)
+                if canonical in stripped_forms or any(
+                    alias in stripped_forms for alias in aliases
+                ):
                     continue
 
                 # 너무 짧은 매칭 무시
