@@ -146,12 +146,29 @@ def _scan_chapters(novel_dir: str, registry: dict, episode_range: str = None) ->
             if len(prefix) < 2:
                 continue
 
+            # 한국어 조사 목록 (조사 제거 후 비교)
+            _JOSA = (
+                "이", "가", "을", "를", "은", "는", "의", "와", "과",
+                "도", "만", "께", "에서", "에게", "으로", "로", "에",
+                "이다", "이고", "이며", "이라", "인", "일",
+            )
+
             # 본문에서 prefix로 시작하는 연속 한글 찾기
             pattern = re.compile(prefix + r"[\w가-힣]*")
             for m in pattern.finditer(text):
                 found = m.group()
                 if found == canonical or found in aliases:
                     continue
+
+                # 조사 제거 후 재비교
+                stripped = found
+                for josa in sorted(_JOSA, key=len, reverse=True):
+                    if stripped.endswith(josa) and len(stripped) > len(josa) + 1:
+                        stripped = stripped[:-len(josa)]
+                        break
+                if stripped == canonical or stripped in aliases:
+                    continue
+
                 # 너무 짧은 매칭 무시
                 if len(found) < 2:
                     continue
